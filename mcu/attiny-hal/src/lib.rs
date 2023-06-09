@@ -9,6 +9,7 @@
 #![cfg_attr(feature = "attiny88", doc = "**ATtiny88**.")]
 #![cfg_attr(feature = "attiny167", doc = "**ATtiny167**.")]
 #![cfg_attr(feature = "attiny2313", doc = "**ATtiny2313**.")]
+#![cfg_attr(feature = "attiny202", doc = "**ATtiny202**.")]
 //! This means that only items which are available for this MCU are visible.  If you are using
 //! a different chip, try building the documentation locally with:
 //!
@@ -29,6 +30,7 @@ compile_error!(
     * attiny88
     * attiny167
     * attiny2313
+    * attiny202
     "
 );
 
@@ -38,6 +40,9 @@ pub use avr_device::attiny84 as pac;
 /// Reexport of `attiny85` from `avr-device`
 #[cfg(feature = "attiny85")]
 pub use avr_device::attiny85 as pac;
+
+#[cfg(feature = "attiny202")]
+pub use avr_device::attiny202 as pac;
 
 /// Reexport of `attiny88` from `avr-device`
 #[cfg(feature = "attiny88")]
@@ -76,11 +81,15 @@ pub use port::Pins;
 #[cfg(feature = "device-selected")]
 pub mod simple_pwm;
 
-#[cfg(feature = "device-selected")]
+#[cfg(all(not(feature = "attiny202"), feature = "device-selected"))]
 pub mod eeprom;
-#[cfg(feature = "device-selected")]
+#[cfg(all(not(feature = "attiny202"), feature = "device-selected"))]
 pub use eeprom::Eeprom;
 
+#[cfg(feature = "attiny202")]
+pub mod spi;
+#[cfg(feature = "attiny202")]
+pub use spi::Spi;
 
 pub struct Attiny;
 
@@ -117,5 +126,12 @@ macro_rules! pins {
 macro_rules! pins {
     ($p:expr) => {
         $crate::Pins::new($p.PORTA, $p.PORTB, $p.PORTD)
+    };
+}
+#[cfg(feature = "attiny202")]
+#[macro_export]
+macro_rules! pins {
+    ($p:expr) => {
+        $crate::Pins::new($p.PORTA)
     };
 }

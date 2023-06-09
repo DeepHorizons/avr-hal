@@ -43,10 +43,19 @@ pub struct AdcSettings {
 }
 
 /// Check the [`avr_hal_generic::adc::Adc`] documentation.
+#[cfg(not(feature = "attiny202"))]
 pub type Adc<CLOCK> = avr_hal_generic::adc::Adc<crate::Attiny, crate::pac::ADC, CLOCK>;
 
+#[cfg(feature = "attiny202")]
+pub type Adc<CLOCK> = avr_hal_generic::adc::Adc<crate::Attiny, crate::pac::ADC0, CLOCK>;
+
+
 /// Check the [`avr_hal_generic::adc::Channel`] documentation.
+#[cfg(not(feature = "attiny202"))]
 pub type Channel = avr_hal_generic::adc::Channel<crate::Attiny, crate::pac::ADC>;
+
+#[cfg(feature = "attiny202")]
+pub type Channel = avr_hal_generic::adc::Channel<crate::Attiny, crate::pac::ADC0>;
 
 /// Additional channels
 ///
@@ -66,8 +75,11 @@ pub mod channel {
     pub struct Vbg;
     pub struct Gnd;
     pub struct Temperature;
+    #[cfg(feature = "attiny202")]
+    pub struct IntRef;
 }
 
+#[cfg(not(feature = "attiny202"))]
 fn apply_clock(peripheral: &crate::pac::ADC, settings: AdcSettings) {
     peripheral.adcsra.write(|w| {
         w.aden().set_bit();
@@ -83,6 +95,79 @@ fn apply_clock(peripheral: &crate::pac::ADC, settings: AdcSettings) {
     });
 }
 
+
+#[cfg(feature = "attiny202")]
+impl crate::adc::AdcOps<crate::Attiny> for crate::pac::ADC0 {
+    type Channel = crate::pac::adc0::muxpos::MUXPOS_A;
+    type Settings = AdcSettings;
+
+    fn raw_init(&mut self, settings: Self::Settings) {
+        self.ctrlc.write(|w| {
+            match settings.clock_divider {
+                ClockDivider::Factor2 => w.presc().div2(),
+                ClockDivider::Factor4 => w.presc().div4(),
+                ClockDivider::Factor8 => w.presc().div8(),
+                ClockDivider::Factor16 => w.presc().div16(),
+                ClockDivider::Factor32 => w.presc().div32(),
+                ClockDivider::Factor64 => w.presc().div64(),
+                ClockDivider::Factor128 => w.presc().div128(),
+            };
+
+            match settings.ref_voltage {
+                ReferenceVoltage::AVcc => w.refsel().vddref(),
+                // TODO what is the internal ref? Datasheet is vague
+                ReferenceVoltage::Internal1_1 => w.refsel().intref(),
+                _ => unreachable!(),
+            }
+        });
+
+        self.ctrla.write(|w| {
+            w.ressel()._10bit();
+            w.enable().set_bit()
+        });
+    }
+
+    fn raw_read_adc(&self) -> u16 {
+        self.res.read().bits()
+    }
+
+    fn raw_is_converting(&self) -> bool {
+        self.command.read().stconv().bit_is_set()
+    }
+
+    fn raw_start_conversion(&mut self) {
+        self.command.write(|w| w.stconv().set_bit())
+    }
+
+    fn raw_set_channel(&mut self, channel: Self::Channel) {
+        self.muxpos.write(|w| w.muxpos().variant(channel))
+    }
+
+    fn raw_enable_channel(&mut self, _channel: Self::Channel) {
+        // TODO attiny202 doesnt have a didr register, what to do here?
+    }
+}
+
+
+#[cfg(feature = "attiny202")]
+avr_hal_generic::impl_adc_pins! {
+    hal: crate::Attiny,
+    peripheral: crate::pac::ADC0,
+    channel_id: crate::pac::adc0::muxpos::MUXPOS_A,
+    pins: {
+        port::PA0: (crate::pac::adc0::muxpos::MUXPOS_A::AIN0),
+        port::PA1: (crate::pac::adc0::muxpos::MUXPOS_A::AIN1),
+        port::PA2: (crate::pac::adc0::muxpos::MUXPOS_A::AIN2),
+        port::PA3: (crate::pac::adc0::muxpos::MUXPOS_A::AIN3),
+        port::PA6: (crate::pac::adc0::muxpos::MUXPOS_A::AIN6),
+        port::PA7: (crate::pac::adc0::muxpos::MUXPOS_A::AIN7),
+    },
+    channels: {
+        channel::IntRef: crate::pac::adc0::muxpos::MUXPOS_A::INTREF,
+        channel::Temperature: crate::pac::adc0::muxpos::MUXPOS_A::TEMPSENSE,
+        channel::Gnd: crate::pac::adc0::muxpos::MUXPOS_A::GND,
+    },
+}
 
 #[cfg(feature = "attiny85")]
 avr_hal_generic::impl_adc! {

@@ -203,6 +203,59 @@ where
 }
 
 #[macro_export]
+macro_rules! impl_adc_pins {
+    (
+        hal: $HAL:ty,
+        peripheral: $ADC:ty,
+        channel_id: $Channel:ty,
+        pins: {
+            $(
+                $(#[$pin_attr:meta])*
+                $pin:ty: ($pin_channel:expr$(, $didr:ident::$didr_method:ident)?),
+            )+
+        },
+        $(channels: {
+            $(
+                $(#[$channel_attr:meta])*
+                $channel_ty:ty: $channel:expr,
+            )*
+        },)?
+    ) => {
+        $(
+        $(#[$pin_attr])*
+        impl $crate::adc::AdcChannel<$HAL, $ADC> for $crate::port::Pin<$crate::port::mode::Analog, $pin> {
+            #[inline]
+            fn channel(&self) -> $Channel {
+                $pin_channel
+            }
+        }
+        )+
+
+        $($(
+        $(#[$channel_attr])*
+        impl $crate::adc::AdcChannel<$HAL, $ADC> for $channel_ty {
+            #[inline]
+            fn channel(&self) -> $Channel {
+                $channel
+            }
+        }
+
+        /// Convert this channel into a generic "[`Channel`][adc-channel]" type.
+        ///
+        /// The generic channel type can be used to store multiple channels in an array.
+        ///
+        /// [adc-channel]: crate::adc::Channel
+        $(#[$channel_attr])*
+        impl $channel_ty {
+            pub fn into_channel(self) -> $crate::adc::Channel<$HAL, $ADC> {
+                $crate::adc::Channel::new(self)
+            }
+        }
+        )*)?
+    };
+}
+
+#[macro_export]
 macro_rules! impl_adc {
     (
         hal: $HAL:ty,
