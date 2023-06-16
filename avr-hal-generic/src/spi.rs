@@ -1,5 +1,5 @@
 //! SPI Implementation
-use crate::port;
+use crate::port::{self, mode::PullUp};
 use core::marker::PhantomData;
 use embedded_hal::spi;
 
@@ -51,6 +51,7 @@ pub struct Settings {
     pub data_order: DataOrder,
     pub clock: SerialClockRate,
     pub mode: spi::Mode,
+    pub master: bool,
 }
 
 impl Default for Settings {
@@ -59,6 +60,7 @@ impl Default for Settings {
             data_order: DataOrder::MostSignificantFirst,
             clock: SerialClockRate::OscfOver4,
             mode: spi::MODE_1,
+            master: true
         }
     }
 }
@@ -84,6 +86,7 @@ pub trait SpiOps<H, SCLK, MOSI, MISO, CS> {
 /// reset itself to SPI slave mode immediately. This wrapper can be used just like an
 /// output pin, because it implements all the same traits from embedded-hal.
 pub struct ChipSelectPin<CSPIN>(port::Pin<port::mode::Output, CSPIN>);
+pub struct ChipSelectPinSlave<CSPIN>(port::Pin<port::mode::Input<port::mode::PullUp>, CSPIN>);
 
 impl<CSPIN: port::PinOps> hal::digital::v2::OutputPin for ChipSelectPin<CSPIN> {
     type Error = core::convert::Infallible;
@@ -289,6 +292,191 @@ where
     CSPIN: port::PinOps,
 {
 }
+
+
+
+
+pub struct SpiSlave<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN> {
+    p: SPI,
+    sclk: port::Pin<port::mode::Input<port::mode::PullUp>, SCLKPIN>,
+    mosi: port::Pin<port::mode::Input<port::mode::PullUp>, MOSIPIN>,
+    miso: port::Pin<port::mode::Output, MISOPIN>,
+    read_in_progress: bool,
+    _cs: PhantomData<CSPIN>,
+    _h: PhantomData<H>,
+}
+
+impl<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN> SpiSlave<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>
+where
+    SPI: SpiOps<H, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>,
+    SCLKPIN: port::PinOps,
+    MOSIPIN: port::PinOps,
+    MISOPIN: port::PinOps,
+    CSPIN: port::PinOps,
+{
+    /// Instantiate an SPI with the registers, SCLK/MOSI/MISO/CS pins, and settings,
+    /// with the internal pull-up enabled on the MISO pin.
+    ///
+    /// The pins are not actually used directly, but they are moved into the struct in
+    /// order to enforce that they are in the correct mode, and cannot be used by anyone
+    /// else while SPI is active.  CS is placed into a `ChipSelectPin` instance and given
+    /// back so that its output state can be changed as needed.
+    pub fn new(
+        p: SPI,
+        sclk: port::Pin<port::mode::Input<port::mode::PullUp>, SCLKPIN>,
+        mosi: port::Pin<port::mode::Input<port::mode::PullUp>, MOSIPIN>,
+        miso: port::Pin<port::mode::Output, MISOPIN>,
+        cs: port::Pin<port::mode::Input<port::mode::PullUp>, CSPIN>,
+        settings: Settings,
+    ) -> (Self, ChipSelectPinSlave<CSPIN>) {
+        let mut spi = Self {
+            p,
+            sclk,
+            mosi,
+            miso,
+            read_in_progress: false,
+            _cs: PhantomData,
+            _h: PhantomData,
+        };
+        let settings = Settings { master: false, ..settings };
+        spi.p.raw_setup(&settings);
+        (spi, ChipSelectPinSlave(cs))
+    }
+
+    /// Instantiate an SPI with the registers, SCLK/MOSI/MISO/CS pins, and settings,
+    /// with an external pull-up on the MISO pin.
+    ///
+    /// The pins are not actually used directly, but they are moved into the struct in
+    /// order to enforce that they are in the correct mode, and cannot be used by anyone
+    /// else while SPI is active.
+    pub fn with_external_pullup(
+        p: SPI,
+        sclk: port::Pin<port::mode::Input<port::mode::PullUp>, SCLKPIN>,
+        mosi: port::Pin<port::mode::Input<port::mode::PullUp>, MOSIPIN>,
+        miso: port::Pin<port::mode::Output, MISOPIN>,
+        cs: port::Pin<port::mode::Input<port::mode::PullUp>, CSPIN>,
+        settings: Settings,
+    ) -> (Self, ChipSelectPinSlave<CSPIN>) {
+        let mut spi = Self {
+            p,
+            sclk,
+            mosi,
+            miso,
+            read_in_progress: false,
+            _cs: PhantomData,
+            _h: PhantomData,
+        };
+        let settings = Settings { master: false, ..settings };
+        spi.p.raw_setup(&settings);
+        (spi, ChipSelectPinSlave(cs))
+    }
+
+    /// Reconfigure the SPI peripheral after initializing
+    pub fn reconfigure(&mut self, settings: Settings) -> nb::Result<(), crate::void::Void> {
+        // wait for any in-flight writes to complete
+        // TODO do we want to flush if we are a slave?
+        //self.flush()?;
+        let settings = Settings { master: false, ..settings };
+        self.p.raw_setup(&settings);
+        Ok(())
+    }
+
+    /// Disable the SPI device and release ownership of the peripheral
+    /// and pins.  Instance can no-longer be used after this is
+    /// invoked.
+    pub fn release(
+        mut self,
+        cs: ChipSelectPinSlave<CSPIN>,
+    ) -> (
+        SPI,
+        port::Pin<port::mode::Input<port::mode::PullUp>, SCLKPIN>,
+        port::Pin<port::mode::Input<port::mode::PullUp>, MOSIPIN>,
+        port::Pin<port::mode::Output, MISOPIN>,
+        port::Pin<port::mode::Input<port::mode::PullUp>, CSPIN>,
+    ) {
+        self.p.raw_release();
+        (self.p, self.sclk, self.mosi, self.miso, cs.0)
+    }
+
+    fn flush(&mut self) -> nb::Result<(), void::Void> {
+        if self.read_in_progress {
+            if self.p.raw_check_iflag() {
+                self.read_in_progress = false;
+            } else {
+                return Err(nb::Error::WouldBlock);
+            }
+        }
+        Ok(())
+    }
+
+    fn receive(&mut self) -> u8 {
+        self.read_in_progress = true;
+        self.p.raw_read()
+    }
+
+    fn write(&mut self, byte: u8) {
+        //self.write_in_progress = true;
+        self.p.raw_write(byte);
+    }
+}
+
+/// FullDuplex trait implementation, allowing this struct to be provided to
+/// drivers that require it for operation.  Only 8-bit word size is supported
+/// for now.
+impl<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN> spi::FullDuplex<u8>
+    for SpiSlave<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>
+where
+    SPI: SpiOps<H, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>,
+    SCLKPIN: port::PinOps,
+    MOSIPIN: port::PinOps,
+    MISOPIN: port::PinOps,
+    CSPIN: port::PinOps,
+{
+    type Error = void::Void;
+
+    /// Sets up the device for transmission and sends the data
+    fn send(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
+        //self.flush()?;
+        self.write(byte);
+        Ok(())
+    }
+
+    /// Reads and returns the response in the data register
+    fn read(&mut self) -> nb::Result<u8, Self::Error> {
+        self.flush()?;
+        Ok(self.receive())
+    }
+}
+
+/// Default Transfer trait implementation. Only 8-bit word size is supported for now.
+impl<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN> hal::blocking::spi::transfer::Default<u8>
+    for SpiSlave<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>
+where
+    SPI: SpiOps<H, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>,
+    SCLKPIN: port::PinOps,
+    MOSIPIN: port::PinOps,
+    MISOPIN: port::PinOps,
+    CSPIN: port::PinOps,
+{
+}
+
+/// Default Write trait implementation. Only 8-bit word size is supported for now.
+impl<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN> hal::blocking::spi::write::Default<u8>
+    for SpiSlave<H, SPI, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>
+where
+    SPI: SpiOps<H, SCLKPIN, MOSIPIN, MISOPIN, CSPIN>,
+    SCLKPIN: port::PinOps,
+    MOSIPIN: port::PinOps,
+    MISOPIN: port::PinOps,
+    CSPIN: port::PinOps,
+{
+}
+
+
+
+
+
+
 
 /// Implement traits for a SPI interface
 #[macro_export]

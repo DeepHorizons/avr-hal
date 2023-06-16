@@ -71,19 +71,23 @@ impl crate::spi::SpiOps<crate::Attiny, port::PA3, port::PA1, port::PA2, port::PA
             }
         });
         self.ctrla.write(|w| {
-            w.master().set_bit();
+            if _settings.master == true {
+                w.master().set_bit();
+
+                match _settings.clock {
+                   SerialClockRate::OscfOver4 => w.presc().div4(),
+                   SerialClockRate::OscfOver16 => w.presc().div16(),
+                   SerialClockRate::OscfOver64 => w.presc().div64(),
+                   SerialClockRate::OscfOver128 => w.presc().div128(),
+                   _ => unreachable!(),
+                };
+            } else {
+                w.master().clear_bit();
+            }
 
             if let DataOrder::LeastSignificantFirst = _settings.data_order {
                 w.dord().set_bit();
             }
-
-            match _settings.clock {
-               SerialClockRate::OscfOver4 => w.presc().div4(),
-               SerialClockRate::OscfOver16 => w.presc().div16(),
-               SerialClockRate::OscfOver64 => w.presc().div64(),
-               SerialClockRate::OscfOver128 => w.presc().div128(),
-               _ => unreachable!(),
-            };
 
             w.enable().set_bit()
         });
@@ -99,7 +103,9 @@ impl crate::spi::SpiOps<crate::Attiny, port::PA3, port::PA1, port::PA2, port::PA
     }
 
     fn raw_read(&self) -> u8 {
+        //self.intflags.write(|w| w.bits(1<<7));
         self.data.read().bits()
+
     }
 
     fn raw_write(&mut self, byte: u8) {
