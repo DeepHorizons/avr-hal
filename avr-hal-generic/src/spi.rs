@@ -415,6 +415,7 @@ where
     }
 
     fn write(&mut self, byte: u8) {
+        // TODO how to handle write collision?
         //self.write_in_progress = true;
         self.p.raw_write(byte);
     }
@@ -436,7 +437,7 @@ where
 
     /// Sets up the device for transmission and sends the data
     fn send(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
-        //self.flush()?;
+        self.flush()?;
         self.write(byte);
         Ok(())
     }

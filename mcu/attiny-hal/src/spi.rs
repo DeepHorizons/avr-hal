@@ -103,9 +103,7 @@ impl crate::spi::SpiOps<crate::Attiny, port::PA3, port::PA1, port::PA2, port::PA
     }
 
     fn raw_read(&self) -> u8 {
-        //self.intflags.write(|w| w.bits(1<<7));
         self.data.read().bits()
-
     }
 
     fn raw_write(&mut self, byte: u8) {
