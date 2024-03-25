@@ -38,8 +38,8 @@ compile_error!(
 pub use avr_device::attiny84 as pac;
 
 /// Reexport of `attiny85` from `avr-device`
-#[cfg(feature = "attiny85")]
-pub use avr_device::attiny85 as pac;
+//#[cfg(feature = "attiny85")]
+//pub use avr_device::attiny85 as pac;
 
 #[cfg(feature = "attiny202")]
 pub use avr_device::attiny202 as pac;
@@ -90,6 +90,10 @@ pub use eeprom::Eeprom;
 pub mod spi;
 #[cfg(feature = "attiny202")]
 pub use spi::Spi;
+#[cfg(feature = "attiny202")]
+pub mod i2c;
+#[cfg(feature = "attiny202")]
+pub use i2c::I2c;
 
 pub struct Attiny;
 
